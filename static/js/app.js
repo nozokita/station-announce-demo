@@ -453,7 +453,7 @@
       const password = $("#login-pass").value;
       const u = MOCK.users.find((x) => x.username === username);
       if (!u || password !== DEMO_PASSWORD) {
-        toast("ログイン失敗（デモ: パスワードは demo）");
+        toast("ログイン失敗");
         return;
       }
       saveSession({ username: u.username, role: u.role, station_id: u.station_id });

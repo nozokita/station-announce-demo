@@ -41,10 +41,10 @@ window.MOCK = {
         "승강장이나 계단에서 스마트폰을 보며 걷는 행위는 매우 위험하오니 삼가 주십시오. 고객 여러분 본인뿐만 아니라 주변 승객분들께도 큰 피해가 될 수 있으니 협조 부탁드립니다.",
       text_zh:
         "在月台或楼梯上边走路边看手机非常危险，请不要这样做。这不仅关系到您自身的安全，也会给周围的乘客带来困扰，敬请配合。",
-      audio_ja: "audio/transport-ja.mp3",
-      audio_en: "audio/transport-en.mp3",
-      audio_ko: "audio/transport-ko.mp3",
-      audio_zh: "audio/transport-zh.mp3",
+      audio_ja: "audio/manner-ja.mp3",
+      audio_en: "audio/manner-en.mp3",
+      audio_ko: "audio/manner-ko.mp3",
+      audio_zh: "audio/manner-zh.mp3",
       is_deleted: false,
     },
     {
