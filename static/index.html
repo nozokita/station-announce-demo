@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>多言語駅放送（モック） — SPEC v2.0</title>
+    <link rel="stylesheet" href="css/styles.css" />
+  </head>
+  <body>
+    <div id="login-page" class="login-page">
+      <div class="login-card">
+        <h1>多言語駅放送システム</h1>
+        <p class="sub">社内専用 WEB アプリ — UI モック（仕様書 SPEC-STATION-ANNOUNCE-001 v2.0）</p>
+        <form id="form-login">
+          <div class="form-group">
+            <label for="login-user">ユーザーID</label>
+            <input id="login-user" name="user" autocomplete="username" required placeholder="admin または operator_nagoya" />
+          </div>
+          <div class="form-group">
+            <label for="login-pass">パスワード</label>
+            <input id="login-pass" type="password" name="pass" autocomplete="current-password" required placeholder="demo" />
+          </div>
+          <button type="submit" class="btn btn-primary btn-block">ログイン</button>
+        </form>
+        <div id="audio-enable" class="audio-enable">
+          <p>初回ログイン後: スケジュール放送のためブラウザの音声を有効にしてください（仕様 4.2 ①）。</p>
+          <button type="button" id="btn-audio-enable" class="btn btn-secondary btn-block">音声を有効にする</button>
+        </div>
+        <p class="hint">
+          デモアカウント: <strong>admin</strong> / <strong>operator_nagoya</strong> / <strong>operator_gifu</strong> — パスワードはすべて
+          <code>demo</code>
+        </p>
+      </div>
+    </div>
+
+    <div id="app-shell" class="app-shell" hidden>
+      <aside class="sidebar">
+        <div class="brand">
+          <strong>駅放送</strong>
+          <span>モックアップ</span>
+        </div>
+        <a href="#" class="nav-item active" data-view="main">② 放送文例一覧</a>
+        <a href="#" class="nav-item admin-only" data-view="broadcast-edit">③ 文例 登録・編集</a>
+        <a href="#" class="nav-item" data-view="schedules">④ スケジュール管理</a>
+        <a href="#" class="nav-item" data-view="logs">⑤ 放送ログ</a>
+        <a href="#" class="nav-item admin-only" data-view="users">⑥ ユーザー管理</a>
+        <a href="#" class="nav-item admin-only" data-view="stations">⑦ 駅管理</a>
+        <div style="flex:1"></div>
+        <p id="nav-user-label" style="padding:0 1rem;font-size:0.8rem;color:var(--muted);margin:0.5rem 0"></p>
+        <button type="button" id="btn-logout" class="btn btn-ghost btn-block logout">ログアウト</button>
+      </aside>
+
+      <div class="main-area">
+        <div class="top-bar">
+          <div id="ws-pill" class="ws-pill">
+            <span class="dot"></span>
+            <span>WSS</span>
+          </div>
+          <select id="main-station" class="station-select lang-select" style="min-width:14rem" title="駅選択"></select>
+          <div class="demo-controls">
+            <label><input type="checkbox" id="demo-ws-fail" /> サーバー障害デモ（切断＋アラート）</label>
+          </div>
+        </div>
+        <div id="alert-banner" class="alert-banner">
+          サーバーに接続できません。スケジュール放送は停止中です。即時放送はローカルキャッシュの範囲で利用可能です。
+        </div>
+
+        <main class="content">
+          <section id="view-main" class="view active">
+            <h2>放送文例一覧（メイン）</h2>
+            <p class="meta" style="margin-top:-0.5rem;color:var(--muted)">
+              お気に入り → 全文例。IndexedDB キャッシュ・WebSocket は本モックではトーストのみ表現。
+            </p>
+            <p class="section-title">お気に入り</p>
+            <div id="favorites-list" class="card-grid two"></div>
+            <p class="section-title">全文例</p>
+            <div id="all-broadcasts-list" class="card-grid two"></div>
+          </section>
+
+          <section id="view-broadcast-edit" class="view">
+            <h2>放送文例 登録・編集（管理者）</h2>
+            <div class="card" style="max-width:720px">
+              <div class="form-group">
+                <label>駅</label>
+                <select id="edit-station-scope">
+                  <option value="">全駅共通</option>
+                  <option value="1">名古屋駅専用</option>
+                  <option value="2">岐阜駅専用</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="edit-title">管理用タイトル</label>
+                <input id="edit-title" placeholder="例: 終電のご案内" />
+              </div>
+              <div class="form-group">
+                <label for="edit-text-ja">日本語テキスト</label>
+                <textarea id="edit-text-ja" placeholder="日本語の放送文を入力"></textarea>
+              </div>
+              <button type="button" id="btn-translate" class="btn btn-secondary">翻訳（Translate モック）</button>
+              <div class="form-group" style="margin-top:1rem">
+                <label for="edit-text-en">英語</label>
+                <textarea id="edit-text-en"></textarea>
+              </div>
+              <div class="form-group">
+                <label for="edit-text-ko">韓国語</label>
+                <textarea id="edit-text-ko"></textarea>
+              </div>
+              <div class="form-group">
+                <label for="edit-text-zh">中国語（マンダリン）</label>
+                <textarea id="edit-text-zh"></textarea>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.5rem">
+                <button type="button" id="btn-tts" class="btn btn-primary">音声生成（Polly→S3 モック）</button>
+                <button type="button" class="btn btn-ghost btn-sm btn-preview" data-lang="ja-JP Kazuha">JA 試聴</button>
+                <button type="button" class="btn btn-ghost btn-sm btn-preview" data-lang="en-US Joanna">EN 試聴</button>
+                <button type="button" class="btn btn-ghost btn-sm btn-preview" data-lang="ko-KR Seoyeon">KO 試聴</button>
+                <button type="button" class="btn btn-ghost btn-sm btn-preview" data-lang="cmn-CN Zhiyu">ZH 試聴</button>
+              </div>
+              <div style="margin-top:1rem;display:flex;justify-content:flex-end">
+                <button type="button" id="btn-broadcast-save" class="btn btn-primary">この内容で放送文を登録（モック）</button>
+              </div>
+            </div>
+          </section>
+
+          <section id="view-schedules" class="view">
+            <h2>スケジュール管理</h2>
+            <p class="meta" style="margin-top:-0.5rem;color:var(--muted)">JST / once・weekly・interval 排他（仕様 5.3）。APScheduler・WSS はモック。</p>
+            <div class="card" style="margin-bottom:1rem;overflow:auto">
+              <div class="toolbar" style="padding:0 0 0.5rem 0">
+                <label style="color:var(--muted);font-size:0.875rem;margin-right:0.5rem">駅フィルタ</label>
+                <select id="sch-station-filter" class="station-select lang-select" style="min-width:12rem">
+                  <option value="">全駅</option>
+                </select>
+              </div>
+              <table class="data">
+                <thead>
+                  <tr>
+                    <th>駅</th>
+                    <th>文例</th>
+                    <th>タイプ</th>
+                    <th>内容</th>
+                    <th>状態</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="schedules-tbody"></tbody>
+              </table>
+            </div>
+            <h3 style="font-size:1rem;margin-bottom:0.75rem">新規追加（フォームのみ）</h3>
+            <form id="form-schedule" class="card schedule-form" style="max-width:640px">
+              <div class="form-group">
+                <label>放送文例</label>
+                <select id="sch-broadcast"></select>
+              </div>
+              <div class="form-group">
+                <label for="sch-type">放送タイプ</label>
+                <select id="sch-type">
+                  <option value="once">一度限り</option>
+                  <option value="interval">間隔指定</option>
+                </select>
+              </div>
+              <div id="grp-once" class="form-group">
+                <label>指定日時（JST）</label>
+                <input type="datetime-local" />
+              </div>
+              <div id="grp-weekly" class="form-group" style="display:none">
+                <label>曜日</label>
+                <div id="weekly-days-row" style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.35rem">
+                  <label><input type="checkbox" value="mon" /> 月</label>
+                  <label><input type="checkbox" value="tue" /> 火</label>
+                  <label><input type="checkbox" value="wed" /> 水</label>
+                  <label><input type="checkbox" value="thu" /> 木</label>
+                  <label><input type="checkbox" value="fri" /> 金</label>
+                  <label><input type="checkbox" value="sat" /> 土</label>
+                  <label><input type="checkbox" value="sun" /> 日</label>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem;font-size:0.8rem">
+                  <button type="button" id="btn-weekdays-all" class="btn btn-ghost btn-sm">平日すべて</button>
+                  <button type="button" id="btn-weekend-all" class="btn btn-ghost btn-sm">土日すべて</button>
+                </div>
+                <label style="margin-top:0.5rem">放送時刻</label>
+                <input type="time" id="weekly-time" value="09:00" />
+              </div>
+              <div id="grp-interval" class="form-group" style="display:none">
+                <label>曜日</label>
+                <div id="interval-days-row" style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.35rem">
+                  <label><input type="checkbox" value="mon" /> 月</label>
+                  <label><input type="checkbox" value="tue" /> 火</label>
+                  <label><input type="checkbox" value="wed" /> 水</label>
+                  <label><input type="checkbox" value="thu" /> 木</label>
+                  <label><input type="checkbox" value="fri" /> 金</label>
+                  <label><input type="checkbox" value="sat" /> 土</label>
+                  <label><input type="checkbox" value="sun" /> 日</label>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.5rem;font-size:0.8rem">
+                  <button type="button" id="btn-int-weekdays-all" class="btn btn-ghost btn-sm">平日すべて</button>
+                  <button type="button" id="btn-int-weekend-all" class="btn btn-ghost btn-sm">土日すべて</button>
+                </div>
+                <div class="row two">
+                  <div class="form-group">
+                    <label>開始時刻</label>
+                    <input type="time" id="interval-start" value="09:00" />
+                  </div>
+                  <div class="form-group">
+                    <label>終了時刻</label>
+                    <input type="time" id="interval-end" value="17:00" />
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>何分ごと</label>
+                  <input type="number" id="interval-min" min="1" value="60" />
+                </div>
+              </div>
+              <div id="grp-period" class="row two" style="display:grid;gap:0.75rem">
+                <div class="form-group">
+                  <label>有効開始日</label>
+                  <input type="date" />
+                </div>
+                <div class="form-group">
+                  <label>有効終了日</label>
+                  <input type="date" />
+                </div>
+              </div>
+              <button type="submit" class="btn btn-primary">追加（モック）</button>
+            </form>
+          </section>
+
+          <section id="view-logs" class="view">
+            <h2>放送ログ</h2>
+            <div class="toolbar">
+              <label style="color:var(--muted);font-size:0.875rem">日付フィルタ</label>
+              <input type="date" id="log-date" />
+            </div>
+            <div class="card" style="overflow:auto">
+              <table class="data">
+                <thead>
+                  <tr>
+                    <th>駅</th>
+                    <th>文例</th>
+                    <th>放送日時</th>
+                    <th>ステータス</th>
+                  </tr>
+                </thead>
+                <tbody id="logs-tbody"></tbody>
+              </table>
+            </div>
+            <p class="hint" style="margin-top:1rem">3ヶ月保持・日次削除は本番のみ（仕様 3.8）。</p>
+          </section>
+
+          <section id="view-users" class="view">
+            <h2>ユーザー管理（管理者）</h2>
+            <div class="card" style="overflow:auto">
+              <table class="data">
+                <thead>
+                  <tr>
+                    <th>ユーザーID</th>
+                    <th>ロール</th>
+                    <th>所属駅</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="users-tbody"></tbody>
+              </table>
+            </div>
+            <p class="hint" style="margin-top:1rem">bcrypt + JWT は本番実装。ここは一覧モックのみ。</p>
+          </section>
+
+          <section id="view-stations" class="view">
+            <h2>駅管理（管理者）</h2>
+            <div class="card" style="overflow:auto">
+              <table class="data">
+                <thead>
+                  <tr>
+                    <th>駅名</th>
+                    <th>状態</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="stations-tbody"></tbody>
+              </table>
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <div id="toast-area" class="toast-area" aria-live="polite"></div>
+
+    <script src="js/mock-data.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>
