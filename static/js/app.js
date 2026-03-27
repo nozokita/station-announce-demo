@@ -69,6 +69,52 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
+  function parseLogDate(log) {
+    if (log.played_at_ms) {
+      return new Date(log.played_at_ms);
+    }
+    return new Date(log.played_at);
+  }
+
+  function formatJstDateTime(log) {
+    const dt = parseLogDate(log);
+    if (Number.isNaN(dt.getTime())) return "—";
+    return new Intl.DateTimeFormat("ja-JP", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(dt);
+  }
+
+  function formatJstDateKey(log) {
+    const dt = parseLogDate(log);
+    if (Number.isNaN(dt.getTime())) return "";
+    const parts = new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(dt);
+    const y = parts.find((p) => p.type === "year")?.value ?? "0000";
+    const m = parts.find((p) => p.type === "month")?.value ?? "00";
+    const d = parts.find((p) => p.type === "day")?.value ?? "00";
+    return `${y}-${m}-${d}`;
+  }
+
+  function pruneOldLogs() {
+    const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - RETENTION_MS;
+    MOCK.logs = MOCK.logs.filter((log) => {
+      const dt = parseLogDate(log);
+      return !Number.isNaN(dt.getTime()) && dt.getTime() >= cutoff;
+    });
+  }
+
   function loadSession() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -198,6 +244,8 @@
     const stationFavs = favoritesForStation(stationId);
     const isFav = stationFavs.includes(b);
     card.className = "card" + (isFav ? " favorite" : "");
+    const session = loadSession();
+    const canDelete = session?.role === "admin";
     const scope =
       b.station_id === null ? "全駅共通" : `${stationById(b.station_id)?.name ?? ""}専用`;
     card.innerHTML = `
@@ -215,6 +263,7 @@
           <option value="all">全言語順（JA→EN→KO→ZH、間に1秒無音・モック）</option>
         </select>
         <button type="button" class="btn btn-primary btn-sm btn-play" data-bid="${b.id}">放送</button>
+        ${canDelete ? `<button type="button" class="btn btn-ghost btn-sm btn-delete-broadcast" data-bid="${b.id}">削除（モック）</button>` : ""}
       </div>
     `;
     $(".btn-play", card).addEventListener("click", () => {
@@ -246,6 +295,17 @@
       }
       renderMain(stationId);
     });
+
+    if (canDelete) {
+      $(".btn-delete-broadcast", card)?.addEventListener("click", () => {
+        if (!confirm(`「${b.title}」を削除しますか？（モック）`)) return;
+        b.is_deleted = true;
+        MOCK.favorites = MOCK.favorites.filter((f) => f.broadcast_id !== b.id);
+        toast("放送文例を削除しました（モック・メモリのみ）");
+        renderMain(stationId);
+        renderSchedules();
+      });
+    }
     return card;
   }
 
@@ -316,8 +376,10 @@
         broadcast_id: b.id,
         schedule_id: null,
         played_at: new Date().toISOString(),
+        played_at_ms: Date.now(),
         status: "success",
       });
+      pruneOldLogs();
       renderLogs();
     })();
   }
@@ -423,6 +485,7 @@
   }
 
   function renderLogs() {
+    pruneOldLogs();
     const s = loadSession();
     const tbody = $("#logs-tbody");
     tbody.innerHTML = "";
@@ -431,7 +494,7 @@
       .filter((log) => {
         if (s.role !== "admin" && log.station_id !== s.station_id) return false;
         if (!filter) return true;
-        return log.played_at.slice(0, 10) === filter;
+        return formatJstDateKey(log) === filter;
       })
       .forEach((log) => {
         const st = stationById(log.station_id);
@@ -440,7 +503,7 @@
         tr.innerHTML = `
           <td>${escapeHtml(st?.name ?? "")}</td>
           <td>${br ? escapeHtml(br.title) : "（削除済み）"}</td>
-          <td>${log.played_at.replace("T", " ").slice(0, 19)} JST相当</td>
+          <td>${formatJstDateTime(log)} JST</td>
           <td><span class="badge ${log.status === "success" ? "badge-success" : "badge-missed"}">${log.status}</span></td>
         `;
         tbody.appendChild(tr);
