@@ -3,6 +3,75 @@
   const DEMO_PASSWORD = "demo";
   let audioEnabled = false;
 
+  /** iOS 等ではタップ外の HTMLAudio 連続 play が拒否されるため、再生用に共有する */
+  let playbackContext = null;
+  function getPlaybackContext() {
+    if (!playbackContext) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (Ctx) playbackContext = new Ctx();
+    }
+    return playbackContext;
+  }
+
+  /** 必ず「放送」等の click ハンドラ内で同期的に呼ぶ（ユーザー操作の伝播用） */
+  function resumeAudioContextFromGesture() {
+    const ac = getPlaybackContext();
+    if (ac && ac.state === "suspended") {
+      void ac.resume();
+    }
+  }
+
+  async function decodeAudioBuffer(ac, arrayBuffer) {
+    const copy = arrayBuffer.slice(0);
+    const p = ac.decodeAudioData(copy);
+    if (p && typeof p.then === "function") return p;
+    return new Promise((resolve, reject) => {
+      const c = arrayBuffer.slice(0);
+      ac.decodeAudioData(c, resolve, reject);
+    });
+  }
+
+  /**
+   * 全言語連続: 1つの AudioContext に BufferSource を並べる（スマホでも許可される）
+   */
+  async function playAllLanguagesWebAudio(ac, urls) {
+    const GAP_SEC = 1;
+    let nextStart = ac.currentTime + 0.05;
+    let played = 0;
+
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i];
+      if (!url) continue;
+      let ab;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("fetch");
+        ab = await res.arrayBuffer();
+      } catch {
+        continue;
+      }
+      let buf;
+      try {
+        buf = await decodeAudioBuffer(ac, ab);
+      } catch {
+        continue;
+      }
+      nextStart = Math.max(nextStart, ac.currentTime + 0.02);
+      const src = ac.createBufferSource();
+      src.buffer = buf;
+      src.connect(ac.destination);
+      src.start(nextStart);
+      played++;
+      nextStart += buf.duration + GAP_SEC;
+    }
+
+    if (played === 0) return;
+
+    const lastEnd = nextStart - GAP_SEC;
+    const waitSec = Math.max(0, lastEnd - ac.currentTime);
+    await new Promise((r) => setTimeout(r, waitSec * 1000 + 50));
+  }
+
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -155,6 +224,7 @@
       </div>
     `;
     $(".btn-play", card).addEventListener("click", () => {
+      resumeAudioContextFromGesture();
       const lang = $(".lang-select", card).value;
       playMock(b, lang);
     });
@@ -226,12 +296,23 @@
           if (p && typeof p.catch === "function") p.catch(() => resolve(false));
         });
 
-      for (let i = 0; i < order.length; i++) {
-        const code = order[i];
-        await playOnce(audioUrlByLang[code]);
-        if (lang === "all" && i < order.length - 1) {
-          // 言語間に 1 秒無音（仕様 3.5）
-          await sleep(1000);
+      if (lang === "all") {
+        const ac = getPlaybackContext();
+        if (!ac) {
+          toast("このブラウザでは Web Audio が使えないため、全言語順を再生できません");
+          return;
+        }
+        const urls = order.map((code) => audioUrlByLang[code]);
+        try {
+          await playAllLanguagesWebAudio(ac, urls);
+        } catch {
+          toast("全言語の連続再生に失敗しました");
+          return;
+        }
+      } else {
+        for (let i = 0; i < order.length; i++) {
+          const code = order[i];
+          await playOnce(audioUrlByLang[code]);
         }
       }
 
@@ -572,7 +653,8 @@
     $("#btn-audio-enable").addEventListener("click", () => {
       $("#audio-enable").classList.remove("visible");
       audioEnabled = true;
-      toast("AudioContext 初期化を模擬しました（仕様: ユーザー操作で有効化）");
+      resumeAudioContextFromGesture();
+      toast("音声を有効にしました（仕様: ユーザー操作で有効化）");
     });
   }
 
