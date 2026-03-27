@@ -3,192 +3,66 @@
   const DEMO_PASSWORD = "demo";
   let audioEnabled = false;
 
-  /** iOS 等ではタップ外の HTMLAudio 連続 play が拒否されるため、再生用に共有する */
-  let playbackContext = null;
-  function getPlaybackContext() {
-    if (!playbackContext) {
-      const Ctx = window.AudioContext || window.webkitAudioContext;
-      if (Ctx) playbackContext = new Ctx();
-    }
-    return playbackContext;
-  }
-
-  /** 必ず「放送」等の click ハンドラ内で同期的に呼ぶ（ユーザー操作の伝播用） */
-  function resumeAudioContextFromGesture() {
-    const ac = getPlaybackContext();
-    if (ac && ac.state === "suspended") {
-      void ac.resume();
-    }
-  }
-
-  /** 新しい「放送」で前回の非同期再生を止め、重ねて鳴らないようにする */
+  /**
+   * iOS Safari では、ユーザージェスチャ（タップ）で play() された
+   * 同一の Audio 要素だけが以降も play() を許可される。
+   * そこで1つの Audio を使い回し、src を差し替えて連続再生する。
+   */
+  let sharedAudio = null;
   let globalPlayId = 0;
-  let fetchAbort = null;
-  const activeBufferSources = [];
-  let activeHtmlAudio = null;
 
-  function stopPreviousPlaybackOutputs() {
-    if (fetchAbort) {
+  function stopCurrentPlayback() {
+    globalPlayId++;
+    if (sharedAudio) {
       try {
-        fetchAbort.abort();
+        sharedAudio.pause();
+        sharedAudio.removeAttribute("src");
+        sharedAudio.load();
       } catch (_) {}
-      fetchAbort = null;
     }
-    activeBufferSources.forEach((s) => {
-      try {
-        s.stop(0);
-      } catch (_) {}
-    });
-    activeBufferSources.length = 0;
-    if (activeHtmlAudio) {
-      try {
-        activeHtmlAudio.pause();
-        activeHtmlAudio.src = "";
-        activeHtmlAudio.load?.();
-      } catch (_) {}
-      activeHtmlAudio = null;
-    }
-  }
-
-  function beginNewPlaybackSession() {
-    stopPreviousPlaybackOutputs();
-    const myId = ++globalPlayId;
-    const ctrl = new AbortController();
-    fetchAbort = ctrl;
-    return { myId, signal: ctrl.signal };
-  }
-
-  async function decodeAudioBuffer(ac, arrayBuffer) {
-    const copy = arrayBuffer.slice(0);
-    const p = ac.decodeAudioData(copy);
-    if (p && typeof p.then === "function") return p;
-    return new Promise((resolve, reject) => {
-      const c = arrayBuffer.slice(0);
-      ac.decodeAudioData(c, resolve, reject);
-    });
-  }
-
-  async function waitPlaybackMs(ms, myId, signal) {
-    await new Promise((resolve) => {
-      const t = setTimeout(resolve, ms);
-      const onAbort = () => {
-        clearTimeout(t);
-        resolve();
-      };
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
-    return myId === globalPlayId && !signal.aborted;
   }
 
   /**
-   * 全言語連続: 1つの AudioContext に BufferSource を並べる（スマホでも許可される）
+   * sharedAudio を1曲再生して resolved する Promise。
+   * myId が古くなったらキャンセル扱い。
    */
-  async function playAllLanguagesWebAudio(ac, urls, myId, signal) {
-    try {
-      const rp = ac.resume();
-      if (rp && typeof rp.then === "function") await rp;
-    } catch (_) {}
-
-    if (myId !== globalPlayId || signal.aborted) return false;
-
-    const GAP_SEC = 1;
-    let nextStart = ac.currentTime + 0.08;
-    let played = 0;
-
-    for (let i = 0; i < urls.length; i++) {
-      if (myId !== globalPlayId || signal.aborted) return false;
-
-      const url = urls[i];
-      if (!url) continue;
-      let ab;
-      try {
-        const abs = new URL(url, window.location.href).href;
-        const res = await fetch(abs, { signal });
-        if (!res.ok) throw new Error("fetch");
-        ab = await res.arrayBuffer();
-      } catch (e) {
-        if (e.name === "AbortError" || signal.aborted) return false;
-        continue;
-      }
-
-      if (myId !== globalPlayId || signal.aborted) return false;
-
-      let buf;
-      try {
-        buf = await decodeAudioBuffer(ac, ab);
-      } catch {
-        continue;
-      }
-
-      if (myId !== globalPlayId || signal.aborted) return false;
-
-      nextStart = Math.max(nextStart, ac.currentTime + 0.02);
-      const src = ac.createBufferSource();
-      src.buffer = buf;
-      src.connect(ac.destination);
-      activeBufferSources.push(src);
-      src.start(nextStart);
-      played++;
-      nextStart += buf.duration + GAP_SEC;
-    }
-
-    if (played === 0) {
-      toast("音声を読み込めませんでした（MP3 のパス・通信を確認してください）");
-      return false;
-    }
-
-    const lastEnd = nextStart - GAP_SEC;
-    const waitMs = Math.max(0, (lastEnd - ac.currentTime) * 1000) + 80;
-    const stillOk = await waitPlaybackMs(waitMs, myId, signal);
-    return stillOk && myId === globalPlayId;
-  }
-
-  /** 日本語のみなど HTMLAudio 1 本（別セッションで上書きされたら打ち切り） */
-  function playOnceHtml(url, myId) {
+  function playSingleFile(url, myId) {
     return new Promise((resolve) => {
-      if (!url) return resolve(false);
-      if (myId !== globalPlayId) return resolve(false);
-      const audio = new Audio(url);
-      activeHtmlAudio = audio;
-      let finished = false;
+      if (!url || myId !== globalPlayId) return resolve(false);
+
+      const audio = sharedAudio;
+      let done = false;
       const finish = (ok) => {
-        if (finished) return;
-        finished = true;
-        if (activeHtmlAudio === audio) activeHtmlAudio = null;
+        if (done) return;
+        done = true;
+        audio.removeEventListener("ended", onEnded);
+        audio.removeEventListener("error", onError);
         resolve(ok);
       };
-      const poll = setInterval(() => {
-        if (myId !== globalPlayId) {
-          clearInterval(poll);
-          try {
-            audio.pause();
-          } catch (_) {}
-          finish(false);
-        }
-      }, 150);
-      audio.addEventListener(
-        "ended",
-        () => {
-          clearInterval(poll);
-          finish(true);
-        },
-        { once: true },
-      );
-      audio.addEventListener(
-        "error",
-        () => {
-          clearInterval(poll);
-          finish(false);
-        },
-        { once: true },
-      );
+      const onEnded = () => finish(true);
+      const onError = () => finish(false);
+      audio.addEventListener("ended", onEnded);
+      audio.addEventListener("error", onError);
+      audio.src = url;
+      audio.load();
       const p = audio.play();
       if (p && typeof p.catch === "function") {
-        p.catch(() => {
-          clearInterval(poll);
-          finish(false);
-        });
+        p.catch(() => finish(false));
       }
+    });
+  }
+
+  function sleep(ms, myId) {
+    return new Promise((resolve) => {
+      const t = setTimeout(() => resolve(myId === globalPlayId), ms);
+      const check = setInterval(() => {
+        if (myId !== globalPlayId) {
+          clearTimeout(t);
+          clearInterval(check);
+          resolve(false);
+        }
+      }, 100);
+      setTimeout(() => clearInterval(check), ms + 50);
     });
   }
 
@@ -344,7 +218,6 @@
       </div>
     `;
     $(".btn-play", card).addEventListener("click", () => {
-      resumeAudioContextFromGesture();
       const lang = $(".lang-select", card).value;
       playMock(b, lang);
     });
@@ -377,59 +250,58 @@
   }
 
   function playMock(b, lang) {
+    if (!audioEnabled) {
+      toast("音声を有効にしてください（仕様 4.2 ①）");
+      return;
+    }
+
+    stopCurrentPlayback();
+
+    if (!sharedAudio) {
+      sharedAudio = new Audio();
+    }
+
+    const myId = globalPlayId;
+
+    const urls =
+      lang === "all"
+        ? [b.audio_ja, b.audio_en, b.audio_ko, b.audio_zh]
+        : [b.audio_ja];
+
+    const label =
+      lang === "all"
+        ? `再生（全言語順）: ${b.title}`
+        : `再生: ${b.title}`;
+    toast(label);
+
+    /** 1曲目だけ同期で src + play（iOS ジェスチャ解除に必須） */
+    sharedAudio.src = urls[0] || "";
+    sharedAudio.load();
+    const firstPlay = sharedAudio.play();
+    if (firstPlay && typeof firstPlay.catch === "function") {
+      firstPlay.catch(() => {
+        if (myId === globalPlayId) toast("再生できませんでした");
+      });
+    }
+
+    /** 1曲目の ended を待ち、2曲目以降を同じ要素で再生 */
     void (async () => {
-      if (!audioEnabled) {
-        toast("音声を有効にしてください（仕様 4.2 ①）");
-        return;
-      }
+      const firstOk = await new Promise((resolve) => {
+        if (myId !== globalPlayId) return resolve(false);
+        const audio = sharedAudio;
+        const onEnd = () => { audio.removeEventListener("error", onErr); resolve(true); };
+        const onErr = () => { audio.removeEventListener("ended", onEnd); resolve(false); };
+        audio.addEventListener("ended", onEnd, { once: true });
+        audio.addEventListener("error", onErr, { once: true });
+      });
+      if (!firstOk || myId !== globalPlayId) return;
 
-      const { myId, signal } = beginNewPlaybackSession();
-
-      const order = lang === "all" ? ["ja", "en", "ko", "zh"] : ["ja"];
-      const parts = order
-        .map((code) => {
-          const key =
-            "text_" +
-            (code === "ja" ? "ja" : code === "en" ? "en" : code === "ko" ? "ko" : "zh");
-          return b[key] || `（${code} 未設定）`;
-        })
-        .join(lang === "all" ? " ［1秒無音］ " : "");
-
-      toast(
-        `再生（モック）: ${b.title} / ${parts.slice(0, 80)}${parts.length > 80 ? "…" : ""}`,
-      );
-
-      // 仕様上は Web Audio API ですが、モックでは mp3 を順番に再生します。
-      const audioUrlByLang = {
-        ja: b.audio_ja,
-        en: b.audio_en,
-        ko: b.audio_ko,
-        zh: b.audio_zh,
-      };
-
-      if (lang === "all") {
-        const ac = getPlaybackContext();
-        if (!ac) {
-          toast("このブラウザでは Web Audio が使えないため、全言語順を再生できません");
-          return;
-        }
-        const urls = order.map((code) => audioUrlByLang[code]);
-        let ok = false;
-        try {
-          ok = await playAllLanguagesWebAudio(ac, urls, myId, signal);
-        } catch (e) {
-          if (e.name !== "AbortError" && myId === globalPlayId) {
-            toast("全言語の連続再生に失敗しました");
-          }
-          return;
-        }
-        if (!ok || myId !== globalPlayId) return;
-      } else {
-        for (let i = 0; i < order.length; i++) {
-          const code = order[i];
-          await playOnceHtml(audioUrlByLang[code], myId);
-          if (myId !== globalPlayId) return;
-        }
+      for (let i = 1; i < urls.length; i++) {
+        if (myId !== globalPlayId) return;
+        const waited = await sleep(1000, myId);
+        if (!waited) return;
+        const played = await playSingleFile(urls[i], myId);
+        if (!played || myId !== globalPlayId) return;
       }
 
       if (myId !== globalPlayId) return;
@@ -771,7 +643,7 @@
     $("#btn-audio-enable").addEventListener("click", () => {
       $("#audio-enable").classList.remove("visible");
       audioEnabled = true;
-      resumeAudioContextFromGesture();
+      if (!sharedAudio) sharedAudio = new Audio();
       toast("音声を有効にしました（仕様: ユーザー操作で有効化）");
     });
   }
