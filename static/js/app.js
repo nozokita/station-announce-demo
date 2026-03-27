@@ -21,6 +21,43 @@
     }
   }
 
+  /** 新しい「放送」で前回の非同期再生を止め、重ねて鳴らないようにする */
+  let globalPlayId = 0;
+  let fetchAbort = null;
+  const activeBufferSources = [];
+  let activeHtmlAudio = null;
+
+  function stopPreviousPlaybackOutputs() {
+    if (fetchAbort) {
+      try {
+        fetchAbort.abort();
+      } catch (_) {}
+      fetchAbort = null;
+    }
+    activeBufferSources.forEach((s) => {
+      try {
+        s.stop(0);
+      } catch (_) {}
+    });
+    activeBufferSources.length = 0;
+    if (activeHtmlAudio) {
+      try {
+        activeHtmlAudio.pause();
+        activeHtmlAudio.src = "";
+        activeHtmlAudio.load?.();
+      } catch (_) {}
+      activeHtmlAudio = null;
+    }
+  }
+
+  function beginNewPlaybackSession() {
+    stopPreviousPlaybackOutputs();
+    const myId = ++globalPlayId;
+    const ctrl = new AbortController();
+    fetchAbort = ctrl;
+    return { myId, signal: ctrl.signal };
+  }
+
   async function decodeAudioBuffer(ac, arrayBuffer) {
     const copy = arrayBuffer.slice(0);
     const p = ac.decodeAudioData(copy);
@@ -31,45 +68,128 @@
     });
   }
 
+  async function waitPlaybackMs(ms, myId, signal) {
+    await new Promise((resolve) => {
+      const t = setTimeout(resolve, ms);
+      const onAbort = () => {
+        clearTimeout(t);
+        resolve();
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    return myId === globalPlayId && !signal.aborted;
+  }
+
   /**
    * 全言語連続: 1つの AudioContext に BufferSource を並べる（スマホでも許可される）
    */
-  async function playAllLanguagesWebAudio(ac, urls) {
+  async function playAllLanguagesWebAudio(ac, urls, myId, signal) {
+    try {
+      const rp = ac.resume();
+      if (rp && typeof rp.then === "function") await rp;
+    } catch (_) {}
+
+    if (myId !== globalPlayId || signal.aborted) return false;
+
     const GAP_SEC = 1;
-    let nextStart = ac.currentTime + 0.05;
+    let nextStart = ac.currentTime + 0.08;
     let played = 0;
 
     for (let i = 0; i < urls.length; i++) {
+      if (myId !== globalPlayId || signal.aborted) return false;
+
       const url = urls[i];
       if (!url) continue;
       let ab;
       try {
-        const res = await fetch(url);
+        const abs = new URL(url, window.location.href).href;
+        const res = await fetch(abs, { signal });
         if (!res.ok) throw new Error("fetch");
         ab = await res.arrayBuffer();
-      } catch {
+      } catch (e) {
+        if (e.name === "AbortError" || signal.aborted) return false;
         continue;
       }
+
+      if (myId !== globalPlayId || signal.aborted) return false;
+
       let buf;
       try {
         buf = await decodeAudioBuffer(ac, ab);
       } catch {
         continue;
       }
+
+      if (myId !== globalPlayId || signal.aborted) return false;
+
       nextStart = Math.max(nextStart, ac.currentTime + 0.02);
       const src = ac.createBufferSource();
       src.buffer = buf;
       src.connect(ac.destination);
+      activeBufferSources.push(src);
       src.start(nextStart);
       played++;
       nextStart += buf.duration + GAP_SEC;
     }
 
-    if (played === 0) return;
+    if (played === 0) {
+      toast("音声を読み込めませんでした（MP3 のパス・通信を確認してください）");
+      return false;
+    }
 
     const lastEnd = nextStart - GAP_SEC;
-    const waitSec = Math.max(0, lastEnd - ac.currentTime);
-    await new Promise((r) => setTimeout(r, waitSec * 1000 + 50));
+    const waitMs = Math.max(0, (lastEnd - ac.currentTime) * 1000) + 80;
+    const stillOk = await waitPlaybackMs(waitMs, myId, signal);
+    return stillOk && myId === globalPlayId;
+  }
+
+  /** 日本語のみなど HTMLAudio 1 本（別セッションで上書きされたら打ち切り） */
+  function playOnceHtml(url, myId) {
+    return new Promise((resolve) => {
+      if (!url) return resolve(false);
+      if (myId !== globalPlayId) return resolve(false);
+      const audio = new Audio(url);
+      activeHtmlAudio = audio;
+      let finished = false;
+      const finish = (ok) => {
+        if (finished) return;
+        finished = true;
+        if (activeHtmlAudio === audio) activeHtmlAudio = null;
+        resolve(ok);
+      };
+      const poll = setInterval(() => {
+        if (myId !== globalPlayId) {
+          clearInterval(poll);
+          try {
+            audio.pause();
+          } catch (_) {}
+          finish(false);
+        }
+      }, 150);
+      audio.addEventListener(
+        "ended",
+        () => {
+          clearInterval(poll);
+          finish(true);
+        },
+        { once: true },
+      );
+      audio.addEventListener(
+        "error",
+        () => {
+          clearInterval(poll);
+          finish(false);
+        },
+        { once: true },
+      );
+      const p = audio.play();
+      if (p && typeof p.catch === "function") {
+        p.catch(() => {
+          clearInterval(poll);
+          finish(false);
+        });
+      }
+    });
   }
 
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -263,6 +383,8 @@
         return;
       }
 
+      const { myId, signal } = beginNewPlaybackSession();
+
       const order = lang === "all" ? ["ja", "en", "ko", "zh"] : ["ja"];
       const parts = order
         .map((code) => {
@@ -285,17 +407,6 @@
         zh: b.audio_zh,
       };
 
-      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-      const playOnce = (url) =>
-        new Promise((resolve) => {
-          if (!url) return resolve(false);
-          const audio = new Audio(url);
-          audio.addEventListener("ended", () => resolve(true), { once: true });
-          audio.addEventListener("error", () => resolve(false), { once: true });
-          const p = audio.play();
-          if (p && typeof p.catch === "function") p.catch(() => resolve(false));
-        });
-
       if (lang === "all") {
         const ac = getPlaybackContext();
         if (!ac) {
@@ -303,18 +414,25 @@
           return;
         }
         const urls = order.map((code) => audioUrlByLang[code]);
+        let ok = false;
         try {
-          await playAllLanguagesWebAudio(ac, urls);
-        } catch {
-          toast("全言語の連続再生に失敗しました");
+          ok = await playAllLanguagesWebAudio(ac, urls, myId, signal);
+        } catch (e) {
+          if (e.name !== "AbortError" && myId === globalPlayId) {
+            toast("全言語の連続再生に失敗しました");
+          }
           return;
         }
+        if (!ok || myId !== globalPlayId) return;
       } else {
         for (let i = 0; i < order.length; i++) {
           const code = order[i];
-          await playOnce(audioUrlByLang[code]);
+          await playOnceHtml(audioUrlByLang[code], myId);
+          if (myId !== globalPlayId) return;
         }
       }
+
+      if (myId !== globalPlayId) return;
 
       const s = loadSession();
       const logStation =
