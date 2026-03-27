@@ -2,7 +2,10 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5"
+    />
     <title>多言語駅放送（モック） — SPEC v2.0</title>
     <link rel="stylesheet" href="css/styles.css" />
   </head>
@@ -36,13 +39,15 @@
           <strong>駅放送</strong>
           <span>モックアップ</span>
         </div>
-        <a href="#" class="nav-item active" data-view="main">② 放送文例一覧</a>
-        <a href="#" class="nav-item admin-only" data-view="broadcast-edit">③ 文例 登録・編集</a>
-        <a href="#" class="nav-item" data-view="schedules">④ スケジュール管理</a>
-        <a href="#" class="nav-item" data-view="logs">⑤ 放送ログ</a>
-        <a href="#" class="nav-item admin-only" data-view="users">⑥ ユーザー管理</a>
-        <a href="#" class="nav-item admin-only" data-view="stations">⑦ 駅管理</a>
-        <div style="flex:1"></div>
+        <nav class="sidebar-nav" aria-label="画面切替">
+          <a href="#" class="nav-item active" data-view="main">② 放送文例一覧</a>
+          <a href="#" class="nav-item admin-only" data-view="broadcast-edit">③ 文例 登録・編集</a>
+          <a href="#" class="nav-item" data-view="schedules">④ スケジュール管理</a>
+          <a href="#" class="nav-item" data-view="logs">⑤ 放送ログ</a>
+          <a href="#" class="nav-item admin-only" data-view="users">⑥ ユーザー管理</a>
+          <a href="#" class="nav-item admin-only" data-view="stations">⑦ 駅管理</a>
+        </nav>
+        <div class="sidebar-spacer" aria-hidden="true"></div>
         <p id="nav-user-label" style="padding:0 1rem;font-size:0.8rem;color:var(--muted);margin:0.5rem 0"></p>
         <button type="button" id="btn-logout" class="btn btn-ghost btn-block logout">ログアウト</button>
       </aside>
@@ -53,7 +58,7 @@
             <span class="dot"></span>
             <span>WSS</span>
           </div>
-          <select id="main-station" class="station-select lang-select" style="min-width:14rem" title="駅選択"></select>
+          <select id="main-station" class="station-select lang-select top-station-select" title="駅選択"></select>
           <div class="demo-controls">
             <label><input type="checkbox" id="demo-ws-fail" /> サーバー障害デモ（切断＋アラート）</label>
           </div>
@@ -125,7 +130,7 @@
             <div class="card" style="margin-bottom:1rem;overflow:auto">
               <div class="toolbar" style="padding:0 0 0.5rem 0">
                 <label style="color:var(--muted);font-size:0.875rem;margin-right:0.5rem">駅フィルタ</label>
-                <select id="sch-station-filter" class="station-select lang-select" style="min-width:12rem">
+                <select id="sch-station-filter" class="station-select lang-select sch-filter-select">
                   <option value="">全駅</option>
                 </select>
               </div>
